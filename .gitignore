@@ -1,0 +1,82 @@
+# Compiled Python code
+__pycache__/
+*.py[cod]
+
+# C extensions
+*.so
+
+# Distribution / packaging
+dist/
+build/
+develop-eggs/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# VSCode
+# (likely no specific entries)
+
+# Text editor (Sublime Text, Atom)
+*.sublime-project
+*.sublime-workspace
+
+# Jupyter Notebooks
+*.ipynb
+
+# Translations
+*.mo
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE specific project settings
+.idea/
+.vscode/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Backups
+backup/
+
+# Logs and Databes
+*.log
+*.sqlite
+*.db
+
+Other files
+file_extractor.py

@@ -1,0 +1,2166 @@
+./main_pyside.py:
+"""
+Main entry point for the Portfolio Manager application.
+
+This script initializes and runs the PySide6-based GUI for the Portfolio Manager.
+It sets up logging and handles any exceptions that occur during startup.
+"""
+
+import sys
+import logging
+from typing import NoReturn
+from PySide6.QtWidgets import QApplication
+from gui.portfolio_manager_gui_pyside import PortfolioManagerGUI
+
+def setup_logging() -> None:
+    """Set up logging for the application."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        filename='portfolio_manager.log'
+    )
+
+def main() -> NoReturn:
+    """
+    Initialize and run the Portfolio Manager application.
+    
+    This function sets up logging, creates the main application window,
+    and starts the event loop. Any unhandled exceptions are logged before
+    the application exits.
+    """
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    try:
+        logger.info("Starting Portfolio Manager application")
+        app = QApplication(sys.argv)
+        window = PortfolioManagerGUI()
+        window.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        logger.exception(f"An error occurred while starting the application: {e}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
+
+./core\config.py:
+"""
+Configuration settings for the Portfolio Manager application.
+
+This module contains all the configuration variables used throughout the application.
+It uses the python-decouple library to allow for easy environment variable overrides.
+"""
+
+from datetime import date
+import logging
+from decouple import config, Csv
+from typing import Final, cast
+
+# Database
+_db_path = config('DB_PATH', default='portfolio.db')
+if not isinstance(_db_path, str):
+    raise TypeError(f"DB_PATH must be a string, got {type(_db_path)}")
+DEFAULT_DB_PATH: Final[str] = cast(str, _db_path)
+LOG_FILE_PATH = config('LOG_FILE_PATH', default='portfolio.log')
+LOG_LEVEL = config('LOG_LEVEL', default=logging.INFO, cast=int)
+
+# Date ranges
+MAX_DATE_RANGE = config('MAX_DATE_RANGE', default=365, cast=int)
+
+# Price fetching
+PRICE_FETCH_RETRY_ATTEMPTS = config('PRICE_FETCH_RETRY_ATTEMPTS', default=3, cast=int)
+PRICE_FETCH_RETRY_DELAY = config('PRICE_FETCH_RETRY_DELAY', default=1, cast=int)  # in seconds
+
+# GUI
+DEFAULT_CHART_HEIGHT = config('DEFAULT_CHART_HEIGHT', default=400, cast=int)
+DEFAULT_CHART_WIDTH = config('DEFAULT_CHART_WIDTH', default=600, cast=int)
+
+# Current date (for testing purposes, normally this would be date.today())
+CURRENT_DATE = config('CURRENT_DATE', default=date.today()) # cast=date creates an error.
+
+# API keys (example of handling sensitive information)
+API_KEYS = config('API_KEYS', default='', cast=Csv())
+
+class DatabaseConfig:
+    """Database-related configuration settings."""
+    PATH = DEFAULT_DB_PATH
+
+class LoggingConfig:
+    """Logging-related configuration settings."""
+    FILE_PATH = LOG_FILE_PATH
+    LEVEL = LOG_LEVEL
+
+class PriceFetchingConfig:
+    """Price fetching-related configuration settings."""
+    RETRY_ATTEMPTS = PRICE_FETCH_RETRY_ATTEMPTS
+    RETRY_DELAY = PRICE_FETCH_RETRY_DELAY
+
+class GUIConfig:
+    """GUI-related configuration settings."""
+    CHART_HEIGHT = DEFAULT_CHART_HEIGHT
+    CHART_WIDTH = DEFAULT_CHART_WIDTH
+
+# Exporting grouped configurations
+DB_CONFIG = DatabaseConfig
+LOG_CONFIG = LoggingConfig
+PRICE_CONFIG = PriceFetchingConfig
+GUI_CONFIG = GUIConfig
+
+
+./core\date_utils.py:
+"""
+Utility functions and classes for date handling in the Portfolio Manager application.
+
+This module provides functions for parsing, formatting, and validating dates,
+as well as a DateValidator class for ensuring date ranges are valid.
+"""
+
+from datetime import datetime, date
+from typing import Union, Optional
+from dateutil.parser import parse as dateutil_parse
+from dateutil.tz import tzutc
+
+InputDate = Union[str, date, datetime]
+
+def parse_date(d: InputDate) -> date:
+    """
+    Parse a date from string, datetime, or date object.
+    
+    Args:
+        d (InputDate): The input date.
+        
+    Returns:
+        date: The parsed date.
+    
+    Raises:
+        ValueError: If the date format is unsupported or invalid.
+    """
+    if isinstance(d, str):
+        try:
+            return dateutil_parse(d).date()
+        except ValueError:
+            raise ValueError(f"Unsupported or invalid date format: {d}")
+    elif isinstance(d, datetime):
+        return d.date()
+    elif isinstance(d, date):
+        return d
+    else:
+        raise ValueError(f"Unsupported date type: {type(d)}")
+
+def format_date(d: date, format_str: str = '%Y-%m-%d') -> str:
+    """
+    Format a date to a specified string format.
+    
+    Args:
+        d (date): The date to format.
+        format_str (str): The desired output format (default: ISO format).
+        
+    Returns:
+        str: The formatted date string.
+    """
+    return d.strftime(format_str)
+
+def convert_timezone(d: datetime, target_tz: Optional[str] = None) -> datetime:
+    """
+    Convert a datetime object to the specified timezone.
+    
+    Args:
+        d (datetime): The datetime to convert.
+        target_tz (Optional[str]): The target timezone (default: UTC).
+        
+    Returns:
+        datetime: The datetime in the target timezone.
+    """
+    if target_tz is None:
+        return d.astimezone(tzutc())
+    return d.astimezone(dateutil_parse(f'2020-01-01T00:00:00{target_tz}').tzinfo)
+
+class DateValidator:
+    @staticmethod
+    def validate_date_range(start_date: date, end_date: date, operation_name: str):
+        """
+        Validate that the date range is correct.
+        
+        Args:
+            start_date (date): The start date.
+            end_date (date): The end date.
+            operation_name (str): The operation name for error messages.
+        
+        Raises:
+            ValueError: If the date range is invalid.
+        """
+        today = date.today()
+        if start_date > today or end_date > today:
+            raise ValueError(
+                f"Error: Cannot perform {operation_name} with future dates. "
+                f"Date range {start_date} to {end_date} contains future dates. "
+                f"Today is {today}."
+            )
+        if start_date > end_date:
+            raise ValueError(
+                f"Error: Invalid date range for {operation_name}. "
+                f"Start date {start_date} is after end date {end_date}."
+            )
+
+    @staticmethod
+    def is_valid_date_range(start_date: date, end_date: date) -> bool:
+        """
+        Check if a date range is valid.
+        
+        Args:
+            start_date (date): The start date.
+            end_date (date): The end date.
+        
+        Returns:
+            bool: True if the date range is valid, False otherwise.
+        """
+        today = date.today()
+        return start_date <= end_date <= today
+
+
+./core\types.py:
+from typing import Union, List, Dict, Optional, TYPE_CHECKING
+from datetime import date, datetime
+
+if TYPE_CHECKING:
+    from datetime import date, datetime
+    DateType = Union[str, date, datetime]
+else:
+    DateType = Union[str, 'date', 'datetime']
+
+DateType = Union[str, date, datetime]
+PriceType = float
+SymbolType = str
+SharesType = float
+AmountType = float
+
+TransactionDict = Dict[str, Union[DateType, SymbolType, str, AmountType, PriceType]]
+CashFlowDict = Dict[str, Union[DateType, AmountType, str]]
+
+PriceData = Dict[SymbolType, Dict[DateType, PriceType]]
+
+
+./core\__init__.py:
+
+
+
+./gui\analysis_tab_pyside.py:
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, 
+                               QLineEdit, QPushButton, QLabel, QCalendarWidget, 
+                               QDialog, QMessageBox)
+from PySide6.QtCore import Qt, QDate
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QDateTimeAxis, QValueAxis
+from PySide6.QtGui import QPainter, QColor
+from portfolio.portfolio import Portfolio
+from datetime import datetime, date
+from core.date_utils import parse_date, DateValidator
+from core.config import CURRENT_DATE, DEFAULT_CHART_HEIGHT, DEFAULT_CHART_WIDTH
+import pandas as pd
+from typing import Optional
+
+class AnalysisTab(QWidget):
+    def __init__(self, portfolio: Portfolio):
+        super().__init__()
+        self.portfolio = portfolio
+        self.create_widgets()
+
+    def create_widgets(self):
+        layout = QVBoxLayout(self)
+
+        # Input frame
+        input_frame = QWidget()
+        input_layout = QFormLayout(input_frame)
+
+        self.start_date = QLineEdit()
+        self.end_date = QLineEdit()
+
+        start_date_button = QPushButton("Select Start Date")
+        start_date_button.clicked.connect(lambda: self.show_calendar(self.start_date))
+        end_date_button = QPushButton("Select End Date")
+        end_date_button.clicked.connect(lambda: self.show_calendar(self.end_date))
+
+        input_layout.addRow("Start Date:", self.start_date)
+        input_layout.addRow(start_date_button)
+        input_layout.addRow("End Date:", self.end_date)
+        input_layout.addRow(end_date_button)
+
+        button_layout = QHBoxLayout()
+        self.roi_button = QPushButton("Calculate ROI")
+        self.roi_button.clicked.connect(self.calculate_roi)
+        self.compare_button = QPushButton("Compare to S&P 500")
+        self.compare_button.clicked.connect(self.compare_to_spy)
+        button_layout.addWidget(self.roi_button)
+        button_layout.addWidget(self.compare_button)
+
+        input_layout.addRow(button_layout)
+
+        layout.addWidget(input_frame)
+
+        # Results frame
+        self.result_label = QLabel("Analysis results will appear here.")
+        self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.result_label.setStyleSheet("font-size: 14px;")
+        layout.addWidget(self.result_label)
+
+        # Chart
+        self.chart_view = QChartView()
+        self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self.chart_view.setMinimumHeight(DEFAULT_CHART_HEIGHT)
+        self.chart_view.setMinimumWidth(DEFAULT_CHART_WIDTH)
+        layout.addWidget(self.chart_view)
+
+    def show_calendar(self, line_edit: QLineEdit):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Date")
+        layout = QVBoxLayout(dialog)
+        calendar = QCalendarWidget(dialog)
+        layout.addWidget(calendar)
+
+        def on_date_selected():
+            selected_date = calendar.selectedDate()
+            line_edit.setText(selected_date.toString("yyyy-MM-dd"))
+            dialog.accept()
+
+        calendar.clicked.connect(on_date_selected)
+        dialog.exec()
+
+    def calculate_roi(self):
+        try:
+            start_date = parse_date(self.start_date.text())
+            end_date = parse_date(self.end_date.text())
+            DateValidator.validate_date_range(start_date, end_date, "ROI calculation")
+            
+            roi = self.portfolio.analyzer.calculate_roi(start_date, end_date)
+            self.result_label.setText(f"Return on Investment (ROI): {roi:.2f}%")
+        except ValueError as e:
+            QMessageBox.warning(self, "Input Error", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Calculation Error", f"An unexpected error occurred: {str(e)}")
+
+    def compare_to_spy(self):
+        try:
+            start_date = parse_date(self.start_date.text())
+            end_date = parse_date(self.end_date.text())
+            DateValidator.validate_date_range(start_date, end_date, "S&P 500 comparison")
+            
+            portfolio_roi = self.portfolio.analyzer.calculate_roi(start_date, end_date)
+            spy_roi = self.portfolio.analyzer.calculate_spy_roi(start_date, end_date)
+            
+            if spy_roi is None:
+                raise ValueError("Unable to calculate S&P 500 comparison")
+
+            difference = portfolio_roi - spy_roi
+            performance_text = (
+                f"Portfolio ROI: {portfolio_roi:.2f}%\n"
+                f"S&P 500 ROI: {spy_roi:.2f}%\n"
+                f"Difference: {difference:.2f}%\n"
+                f"Your portfolio {'outperformed' if difference > 0 else 'underperformed'} "
+                f"the S&P 500 by {abs(difference):.2f}%"
+            )
+            self.result_label.setText(performance_text)
+            
+            self.plot_roi_comparison(start_date, end_date, portfolio_roi, spy_roi)
+        except ValueError as e:
+            QMessageBox.warning(self, "Input Error", str(e))
+        except Exception as e:
+            QMessageBox.critical(self, "Calculation Error", f"An unexpected error occurred: {str(e)}")
+
+    def plot_roi_comparison(self, start_date: date, end_date: date, portfolio_roi: float, spy_roi: float):
+        chart = QChart()
+        chart.setTitle("ROI Comparison: Portfolio vs S&P 500")
+
+        portfolio_series = QLineSeries()
+        portfolio_series.setName("Portfolio ROI")
+        portfolio_series.append(start_date.toordinal(), 0)
+        portfolio_series.append(end_date.toordinal(), portfolio_roi)
+
+        spy_series = QLineSeries()
+        spy_series.setName("S&P 500 ROI")
+        spy_series.append(start_date.toordinal(), 0)
+        spy_series.append(end_date.toordinal(), spy_roi)
+
+        chart.addSeries(portfolio_series)
+        chart.addSeries(spy_series)
+
+        axis_x = QDateTimeAxis()
+        axis_x.setFormat("dd-MM-yyyy")
+        axis_x.setTitleText("Date")
+        chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+        portfolio_series.attachAxis(axis_x)
+        spy_series.attachAxis(axis_x)
+
+        axis_y = QValueAxis()
+        axis_y.setTitleText("ROI (%)")
+        chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+        portfolio_series.attachAxis(axis_y)
+        spy_series.attachAxis(axis_y)
+
+        chart.legend().setVisible(True)
+        chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
+
+        self.chart_view.setChart(chart)
+
+    @staticmethod
+    def parse_date(date_string: str) -> date:
+        try:
+            return datetime.strptime(date_string, "%Y-%m-%d").date()
+        except ValueError:
+            raise ValueError(f"Invalid date format: {date_string}. Please use YYYY-MM-DD.")
+
+    @staticmethod
+    def validate_date_range(start_date: date, end_date: date):
+        if start_date > end_date:
+            raise ValueError("Start date must be before end date.")
+        if end_date > date.today():
+            raise ValueError("End date cannot be in the future.")
+
+    def update(self):
+        # This method can be used to refresh the analysis if needed
+        pass
+
+
+./gui\overview_tab_pyside.py:
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QFrame
+from PySide6.QtCore import Qt
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QDateTimeAxis, QValueAxis
+from PySide6.QtGui import QPainter
+from datetime import date, datetime
+from portfolio.portfolio import Portfolio
+from typing import Dict, Any
+import pandas as pd
+
+def to_timestamp(date_value: Any) -> int:
+    print(f"to_timestamp received: {date_value}, type: {type(date_value)}")
+    
+    if isinstance(date_value, str):
+        dt = datetime.fromisoformat(date_value)
+    elif isinstance(date_value, date):
+        dt = datetime.combine(date_value, datetime.min.time())
+    elif isinstance(date_value, datetime):
+        dt = date_value
+    elif isinstance(date_value, (int, float)):
+        # Assume it's already a timestamp
+        return int(date_value * 1000)
+    elif hasattr(date_value, 'timestamp'):
+        # If it has a timestamp method, use it
+        return int(date_value.timestamp() * 1000)
+    else:
+        raise ValueError(f"Unexpected date type: {type(date_value)}")
+    
+    return int(dt.timestamp() * 1000)
+
+class OverviewTab(QWidget):
+    def __init__(self, portfolio: Portfolio):
+        super().__init__()
+        self.portfolio = portfolio
+        self.create_widgets()
+
+    def create_widgets(self):
+        layout = QVBoxLayout(self)
+
+        # Summary Frame
+        summary_frame = QFrame(self)
+        summary_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        summary_layout = QVBoxLayout(summary_frame)
+        
+        self.portfolio_value_label = QLabel("Current Portfolio Value: $0.00")
+        self.cash_balance_label = QLabel("Cash Balance: $0.00")
+        
+        summary_layout.addWidget(self.portfolio_value_label)
+        summary_layout.addWidget(self.cash_balance_label)
+        
+        layout.addWidget(summary_frame)
+
+        # Chart
+        self.chart_view = QChartView()
+        self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
+        layout.addWidget(self.chart_view)
+
+        self.update()
+
+    def update(self):
+        current_value = self.portfolio.get_current_value()
+        self.portfolio_value_label.setText(f"Current Portfolio Value: ${current_value:.2f}")
+        self.cash_balance_label.setText(f"Cash Balance: ${self.portfolio.cash:.2f}")
+        self.plot_portfolio_value()
+
+    def plot_portfolio_value(self):
+        end_date = datetime.now().date()
+        start_date = self.get_start_date()
+        
+        if start_date == end_date:
+            # No historical data to display
+            return
+
+        portfolio_values = self.portfolio.get_portfolio_value_over_time(start_date, end_date)
+        
+        if portfolio_values.empty:
+            # No data to display
+            return
+
+        print(f"Type of portfolio_values: {type(portfolio_values)}")
+        if isinstance(portfolio_values, pd.Series):
+            print(f"Index type: {type(portfolio_values.index)}")
+            print(f"Sample index item: {portfolio_values.index[0]}, type: {type(portfolio_values.index[0])}")
+            print(f"Sample value: {portfolio_values.iloc[0]}, type: {type(portfolio_values.iloc[0])}")
+            series = QLineSeries()
+            for date, value in portfolio_values.items():
+                # Convert to milliseconds since epoch, regardless of the exact type
+                if isinstance(date, (pd.Timestamp, datetime)):
+                    ms = int(date.timestamp() * 1000)
+                elif isinstance(date, str):
+                    ms = int(pd.Timestamp(date).timestamp() * 1000)
+                else:
+                    print(f"Unexpected date type: {type(date)}")
+                    continue
+                
+                series.append(ms, float(value))
+
+            chart = QChart()
+            chart.addSeries(series)
+            chart.setTitle("Portfolio Value Over Time")
+
+            axis_x = QDateTimeAxis()
+            axis_x.setFormat("dd-MM-yyyy")
+            axis_x.setTitleText("Date")
+            chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
+            series.attachAxis(axis_x)
+
+            axis_y = QValueAxis()
+            axis_y.setTitleText("Value ($)")
+            chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
+            series.attachAxis(axis_y)
+
+            self.chart_view.setChart(chart)
+        else:
+            print("No portfolio value data available to display")
+
+    def get_start_date(self):
+        all_dates = ([t.date for t in self.portfolio.transactions] +
+                    [cf.date for cf in self.portfolio.cash_flows])
+        return min(all_dates) if all_dates else date.today()
+
+
+
+./gui\portfolio_manager_gui_pyside.py:
+from PySide6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QMessageBox
+from PySide6.QtCore import QTimer
+from portfolio.portfolio import Portfolio
+from .overview_tab_pyside import OverviewTab
+from .transactions_tab_pyside import TransactionsTab
+from .analysis_tab_pyside import AnalysisTab
+import logging
+
+class PortfolioManagerGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Portfolio Manager")
+        self.setGeometry(100, 100, 1000, 800)
+        self.logger = self.setup_logger()
+        self.portfolio = None
+        self.create_loading_screen()
+        QTimer.singleShot(0, self.load_portfolio)
+
+    def setup_logger(self):
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        return logger
+
+    def create_loading_screen(self):
+        from PySide6.QtWidgets import QLabel, QProgressBar
+        self.loading_widget = QWidget(self)
+        layout = QVBoxLayout(self.loading_widget)
+        self.loading_label = QLabel("Loading portfolio...", self.loading_widget)
+        self.progress_bar = QProgressBar(self.loading_widget)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        layout.addWidget(self.loading_label)
+        layout.addWidget(self.progress_bar)
+        self.setCentralWidget(self.loading_widget)
+
+    def load_portfolio(self):
+        try:
+            self.portfolio = Portfolio('portfolio.db')
+            self.create_widgets()
+        except Exception as e:
+            self.logger.error(f"Error loading portfolio: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to load portfolio: {str(e)}")
+            self.close()
+
+    def create_widgets(self):
+        if self.portfolio is None:
+            raise ValueError("Portfolio not initialized")
+        
+        self.tab_widget = QTabWidget(self)
+        self.overview_tab = OverviewTab(self.portfolio)
+        self.transactions_tab = TransactionsTab(self.portfolio, self.update_ui)
+        self.analysis_tab = AnalysisTab(self.portfolio)
+
+        self.tab_widget.addTab(self.overview_tab, "Overview")
+        self.tab_widget.addTab(self.transactions_tab, "Transactions")
+        self.tab_widget.addTab(self.analysis_tab, "Analysis")
+
+        self.setCentralWidget(self.tab_widget)
+
+        # Update the UI after creating widgets
+        self.update_ui()
+
+    def update_ui(self):
+        self.overview_tab.update()
+        self.transactions_tab.update()
+        self.analysis_tab.update()
+
+    def closeEvent(self, event):
+        try:
+            # Since we're using SQLite, we don't need to explicitly save the portfolio
+            event.accept()
+        except Exception as e:
+            self.logger.error(f"Error on closing: {str(e)}")
+            QMessageBox.critical(self, "Error", f"An error occurred while closing the application: {str(e)}")
+            event.accept()
+
+
+
+./gui\transactions_tab_pyside.py:
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, 
+                               QLineEdit, QComboBox, QPushButton, QTableWidget, 
+                               QTableWidgetItem, QMessageBox, QCalendarWidget,
+                               QDialog, QLabel, QGroupBox, QAbstractItemView)
+from PySide6.QtCore import Qt, QDate
+from portfolio.portfolio import Portfolio
+from portfolio.transaction import Transaction, CashFlow, create_transaction, create_cash_flow
+from datetime import datetime
+import logging
+
+class TransactionsTab(QWidget):
+    def __init__(self, portfolio: Portfolio, update_callback):
+        super().__init__()
+        self.portfolio = portfolio
+        self.update_callback = update_callback
+        self.logger = logging.getLogger(__name__)
+        self.create_widgets()
+
+    def create_widgets(self):
+        main_layout = QVBoxLayout(self)
+
+        # Input forms
+        input_layout = QHBoxLayout()
+        input_layout.addWidget(self.create_transaction_input())
+        input_layout.addWidget(self.create_cash_flow_input())
+        main_layout.addLayout(input_layout)
+
+        # History tables
+        history_layout = QHBoxLayout()
+        history_layout.addWidget(self.create_transaction_history())
+        history_layout.addWidget(self.create_cash_flow_history())
+        main_layout.addLayout(history_layout)
+
+    def create_transaction_input(self):
+        group_box = QGroupBox("Add Transaction")
+        form = QFormLayout()
+        self.transaction_entries = {
+            'date': QLineEdit(),
+            'symbol': QLineEdit(),
+            'action': QComboBox(),
+            'amount': QLineEdit(),
+            'price': QLineEdit(),
+            'fees': QLineEdit()
+        }
+        self.transaction_entries['action'].addItems(["Buy", "Sell"])
+        
+        date_button = QPushButton("Select Date")
+        date_button.clicked.connect(lambda: self.show_calendar(self.transaction_entries['date']))
+        
+        form.addRow("Date:", self.transaction_entries['date'])
+        form.addRow(date_button)
+        form.addRow("Symbol:", self.transaction_entries['symbol'])
+        form.addRow("Action:", self.transaction_entries['action'])
+        form.addRow("Amount ($):", self.transaction_entries['amount'])
+        form.addRow("Price per Share ($):", self.transaction_entries['price'])
+        form.addRow("Fees ($):", self.transaction_entries['fees'])
+
+        add_button = QPushButton("Add Transaction")
+        add_button.clicked.connect(self.add_transaction)
+        form.addRow(add_button)
+
+        group_box.setLayout(form)
+        return group_box
+
+    def create_cash_flow_input(self):
+        group_box = QGroupBox("Add Cash Flow")
+        form = QFormLayout()
+        self.cash_flow_entries = {
+            'date': QLineEdit(),
+            'amount': QLineEdit(),
+            'flow_type': QComboBox()
+        }
+        self.cash_flow_entries['flow_type'].addItems(["Deposit", "Withdrawal", "Dividend"])
+        
+        date_button = QPushButton("Select Date")
+        date_button.clicked.connect(lambda: self.show_calendar(self.cash_flow_entries['date']))
+        
+        form.addRow("Date:", self.cash_flow_entries['date'])
+        form.addRow(date_button)
+        form.addRow("Amount ($):", self.cash_flow_entries['amount'])
+        form.addRow("Type:", self.cash_flow_entries['flow_type'])
+
+        add_button = QPushButton("Add Cash Flow")
+        add_button.clicked.connect(self.add_cash_flow)
+        form.addRow(add_button)
+
+        group_box.setLayout(form)
+        return group_box
+
+    def show_calendar(self, line_edit):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Date")
+        layout = QVBoxLayout(dialog)
+        calendar = QCalendarWidget(dialog)
+        layout.addWidget(calendar)
+
+        def on_date_selected():
+            selected_date = calendar.selectedDate()
+            line_edit.setText(selected_date.toString("yyyy-MM-dd"))
+            dialog.accept()
+
+        calendar.clicked.connect(on_date_selected)
+        dialog.exec()
+
+    def create_transaction_history(self):
+        group_box = QGroupBox("Transaction History")
+        layout = QVBoxLayout()
+        self.transaction_table = QTableWidget(0, 7)
+        self.transaction_table.setHorizontalHeaderLabels(["Date", "Symbol", "Action", "Amount ($)", "Price ($)", "Shares", "Fees ($)"])
+        self.transaction_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.transaction_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.transaction_table)
+        group_box.setLayout(layout)
+        return group_box
+
+    def create_cash_flow_history(self):
+        group_box = QGroupBox("Cash Flow History")
+        layout = QVBoxLayout()
+        self.cash_flow_table = QTableWidget(0, 3)
+        self.cash_flow_table.setHorizontalHeaderLabels(["Date", "Amount ($)", "Type"])
+        self.cash_flow_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.cash_flow_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.cash_flow_table)
+        group_box.setLayout(layout)
+        return group_box
+
+    def add_transaction(self):
+        try:
+            self.logger.debug("Creating transaction from input")
+            transaction = self.create_transaction_from_input()
+            shares = transaction.shares
+            if shares < 0.0001:  # Minimum tradable amount
+                raise ValueError("Amount results in less than 0.0001 shares")
+            self.logger.debug(f"Created transaction: {transaction}")
+            self.logger.debug("Adding transaction to portfolio")
+            self.portfolio.add_transaction(transaction)
+            self.logger.debug("Transaction added successfully")
+            self.update()
+            self.update_callback()
+            QMessageBox.information(self, "Success", "Transaction added successfully!")
+            self.clear_inputs(self.transaction_entries)
+        except ValueError as e:
+            self.logger.error(f"Invalid input for transaction: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Invalid input: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error adding transaction: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred: {str(e)}")
+
+    def add_cash_flow(self):
+        try:
+            self.logger.debug("Creating cash flow from input")
+            cash_flow = self.create_cash_flow_from_input()
+            self.logger.debug(f"Created cash flow: {cash_flow}")
+            self.logger.debug("Adding cash flow to portfolio")
+            self.portfolio.add_cash_flow(cash_flow)
+            self.logger.debug("Cash flow added successfully")
+            self.update()
+            self.update_callback()
+            QMessageBox.information(self, "Success", "Cash flow added successfully!")
+            self.clear_inputs(self.cash_flow_entries)
+        except ValueError as e:
+            self.logger.error(f"Invalid input for cash flow: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Invalid input: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error adding cash flow: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Error", f"An unexpected error occurred: {str(e)}")
+
+    def create_transaction_from_input(self):
+        date = datetime.strptime(self.transaction_entries['date'].text(), "%Y-%m-%d").date()
+        symbol = self.transaction_entries['symbol'].text().strip().upper()
+        action = self.transaction_entries['action'].currentText()
+        amount = float(self.transaction_entries['amount'].text().strip())
+        price = float(self.transaction_entries['price'].text().strip())
+        fees = float(self.transaction_entries['fees'].text().strip() or 0)
+
+        return create_transaction(date, symbol, action, amount, price, fees)
+
+    def create_cash_flow_from_input(self):
+        date = datetime.strptime(self.cash_flow_entries['date'].text(), "%Y-%m-%d").date()
+        amount = float(self.cash_flow_entries['amount'].text().strip())
+        flow_type = self.cash_flow_entries['flow_type'].currentText()
+
+        return create_cash_flow(date, amount, flow_type)
+
+    def clear_inputs(self, entries):
+        for entry in entries.values():
+            if isinstance(entry, QLineEdit):
+                entry.clear()
+            elif isinstance(entry, QComboBox):
+                entry.setCurrentIndex(0)
+
+    def update(self):
+        self.update_transaction_history()
+        self.update_cash_flow_history()
+
+    def update_transaction_history(self):
+        self.transaction_table.setRowCount(0)
+        for t in self.portfolio.get_transaction_history():
+            row = self.transaction_table.rowCount()
+            self.transaction_table.insertRow(row)
+            self.transaction_table.setItem(row, 0, QTableWidgetItem(t.date.strftime("%Y-%m-%d")))
+            self.transaction_table.setItem(row, 1, QTableWidgetItem(t.symbol))
+            self.transaction_table.setItem(row, 2, QTableWidgetItem(t.action))
+            self.transaction_table.setItem(row, 3, QTableWidgetItem(f"${t.amount:.2f}"))
+            self.transaction_table.setItem(row, 4, QTableWidgetItem(f"${t.price:.2f}"))
+            self.transaction_table.setItem(row, 5, QTableWidgetItem(f"{t.shares:.4f}"))
+            self.transaction_table.setItem(row, 6, QTableWidgetItem(f"${t.fees:.2f}"))
+
+    def update_cash_flow_history(self):
+        self.cash_flow_table.setRowCount(0)
+        for cf in self.portfolio.get_cash_flow_history():
+            row = self.cash_flow_table.rowCount()
+            self.cash_flow_table.insertRow(row)
+            self.cash_flow_table.setItem(row, 0, QTableWidgetItem(cf.date.strftime("%Y-%m-%d")))
+            self.cash_flow_table.setItem(row, 1, QTableWidgetItem(f"${cf.amount:.2f}"))
+            self.cash_flow_table.setItem(row, 2, QTableWidgetItem(cf.flow_type))
+
+
+
+./gui\__init__.py:
+
+
+
+./portfolio\portfolio.py:
+from __future__ import annotations
+
+import sqlite3
+from typing import Dict, List, Optional, Set
+from datetime import datetime, date, timedelta
+import pandas as pd
+import logging
+from .price_fetcher import PriceFetcher, YFinancePriceFetcher, PriceFetcherManager
+from .transaction import Transaction, CashFlow
+from decimal import Decimal
+from core.config import DEFAULT_DB_PATH, LOG_FILE_PATH
+from core.date_utils import parse_date, InputDate
+import traceback
+import threading
+
+pd.set_option('future.no_silent_downcasting', True)
+
+class PortfolioValueError(Exception):
+    pass
+
+class PriceDataError(Exception):
+    pass
+
+class PortfolioError(Exception):
+    pass
+
+def setup_logger(name, log_file, level=logging.INFO):
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setFormatter(formatter)
+    
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    
+    return logger
+
+class ThreadSafeDatabaseManager:
+    def __init__(self, db_file: str):
+        self.db_file = db_file
+        self._local = threading.local()
+
+    @property
+    def conn(self):
+        if not hasattr(self._local, 'conn'):
+            self._local.conn = sqlite3.connect(self.db_file, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
+            self._local.conn.row_factory = sqlite3.Row
+        return self._local.conn
+
+    def __enter__(self):
+        return self.conn.cursor()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+
+    def close(self):
+        if hasattr(self._local, 'conn'):
+            self._local.conn.close()
+            del self._local.conn
+
+class DatabaseManager:
+    def __init__(self, db_file: str):
+        self.db_file = db_file
+
+    def __enter__(self):
+        self.conn = sqlite3.connect(self.db_file, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES)
+        self.conn.row_factory = sqlite3.Row
+        self.init_db()
+        return self.conn.cursor()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+        self.conn.close()
+
+    def init_db(self):
+        statements = [
+            '''
+            CREATE TABLE IF NOT EXISTS price_cache (
+                symbol TEXT,
+                date DATE,
+                price DECIMAL(15,2),
+                PRIMARY KEY (symbol, date)
+            )
+            ''',
+            'CREATE INDEX IF NOT EXISTS idx_price_cache_date ON price_cache(date)',
+            'PRAGMA table_info(price_cache)',
+            '''
+            CREATE TABLE IF NOT EXISTS price_cache_new (
+                symbol TEXT,
+                date DATE,
+                price DECIMAL(15,2),
+                PRIMARY KEY (symbol, date)
+            )
+            ''',
+            'CREATE INDEX IF NOT EXISTS idx_price_cache_new_date ON price_cache_new(date)',
+            'INSERT OR REPLACE INTO price_cache_new SELECT * FROM price_cache',
+            'DROP TABLE IF EXISTS price_cache',
+            'ALTER TABLE price_cache_new RENAME TO price_cache',
+            'PRAGMA table_info(price_cache)',
+            '''
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY,
+                date DATE NOT NULL,
+                symbol TEXT NOT NULL,
+                action TEXT NOT NULL,
+                amount DECIMAL(15,2) NOT NULL,
+                price DECIMAL(15,2) NOT NULL,
+                fees DECIMAL(15,2) NOT NULL
+            )
+            ''',
+            '''
+            CREATE TABLE IF NOT EXISTS cash_flows (
+                id INTEGER PRIMARY KEY,
+                date DATE NOT NULL,
+                amount DECIMAL(15,2) NOT NULL,
+                flow_type TEXT NOT NULL
+            )
+            '''
+        ]
+        
+        with self.conn:
+            cursor = self.conn.cursor()
+            for statement in statements:
+                cursor.execute(statement)
+            self.conn.commit()
+
+    def tables_exist(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = cursor.fetchall()
+        table_names = [table['name'] for table in tables]
+        required_tables = ['price_cache', 'transactions', 'cash_flows']
+        return all(table in table_names for table in required_tables)
+
+class DateValidator:
+    @staticmethod
+    def validate_not_future(check_date: date, operation_name: str):
+        today = date.today()
+        if check_date > today:
+            raise ValueError(f"Error: Cannot perform {operation_name} with future date {check_date}. Today is {today}.")
+
+    @staticmethod
+    def validate_date_range(start_date: date, end_date: date, operation_name: str):
+        today = date.today()
+        if start_date > today or end_date > today:
+            raise ValueError(f"Error: Cannot perform {operation_name} with future dates. Date range {start_date} to {end_date} contains future dates. Today is {today}.")
+        if start_date > end_date:
+            raise ValueError(f"Error: Invalid date range for {operation_name}. Start date {start_date} is after end date {end_date}.")
+
+
+class StockPriceCache:
+    def __init__(self, db_file: str):
+        self.db_manager = DatabaseManager(db_file)
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)  # Set to DEBUG level
+        self.parse_date = parse_date
+
+    def get_cached_prices(self, symbol: str, start_date: InputDate, end_date: InputDate) -> pd.Series:
+        start_date = self.parse_date(start_date)
+        end_date = self.parse_date(end_date)
+        self.logger.debug(f"Getting cached prices for {symbol} from {start_date} to {end_date}")
+        with self.db_manager as cursor:
+            cursor.execute(
+                "SELECT date, price FROM price_cache WHERE symbol = ? AND date BETWEEN ? AND ? ORDER BY date",
+                (symbol, start_date.isoformat(), end_date.isoformat())
+            )
+            results = cursor.fetchall()
+        self.logger.debug(f"Raw results from database: {results}")
+        prices = pd.Series({pd.to_datetime(row['date']): row['price'] for row in results}, name=symbol)
+        prices = prices.sort_index()
+        self.logger.debug(f"Retrieved prices:\n{prices}")
+        return prices
+
+    def cache_prices(self, symbol: str, prices: pd.Series):
+        self.logger.debug(f"Caching prices for {symbol}: {prices}")
+        with self.db_manager as cursor:
+            for index, price in prices.items():
+                if isinstance(index, (datetime, date)):
+                    date_str = index.strftime('%Y-%m-%d')
+                else:
+                    date_str = str(index)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO price_cache (symbol, date, price) VALUES (?, ?, ?)",
+                    (symbol, date_str, float(price))
+                )
+                self.logger.debug(f"Cached price for {symbol} on {date_str}: {price}")
+        self.logger.debug(f"Cached {len(prices)} prices for {symbol}")
+
+    def get_last_cached_date(self, symbol: str) -> Optional[date]:
+        self.logger.debug(f"Getting last cached date for {symbol}")
+        with self.db_manager as cursor:
+            cursor.execute(
+                "SELECT MAX(date) FROM price_cache WHERE symbol = ?",
+                (symbol,)
+            )
+            result = cursor.fetchone()
+        if result and result[0]:
+            last_date = self.parse_date(result[0])
+            self.logger.debug(f"Last cached date for {symbol}: {last_date}")
+            return last_date
+        else:
+            self.logger.debug(f"No cached dates found for {symbol}")
+            return None
+
+
+class PortfolioAnalyzer:
+    def __init__(self, portfolio: 'Portfolio'):
+        self.portfolio = portfolio
+        self.logger = logging.getLogger(__name__)
+
+    def calculate_roi(self, start_date: date, end_date: date) -> float:
+        if start_date > end_date:
+            raise ValueError("Start date must be before end date")
+        start_value = self.portfolio._get_portfolio_value_at_date(start_date)
+        end_value = self.portfolio._get_portfolio_value_at_date(end_date)
+        if start_value == 0:
+            return 0  # Avoid division by zero
+        return (end_value - start_value) / start_value * 100
+
+    def calculate_spy_roi(self, start_date: date, end_date: date) -> Optional[float]:
+        try:
+            self.logger.info(f"Calculating S&P 500 ROI from {start_date} to {end_date}")
+            
+            spy_data = self.portfolio._fetch_prices(['SPY'], start_date, end_date)
+            if spy_data.empty or 'SPY' not in spy_data.columns:
+                self.logger.warning("Unable to fetch S&P 500 data for ROI calculation")
+                return None
+            
+            spy_start_price = spy_data['SPY'].iloc[0]
+            spy_end_price = spy_data['SPY'].iloc[-1]
+            self.logger.info(f"S&P 500 start price: {spy_start_price}, end price: {spy_end_price}")
+            
+            spy_roi = ((spy_end_price - spy_start_price) / spy_start_price) * 100
+            self.logger.info(f"Calculated S&P 500 ROI: {spy_roi}%")
+            
+            return spy_roi
+        except Exception as e:
+            self.logger.error(f"Error in calculate_spy_roi: {str(e)}")
+            return None
+
+    def compare_to_spy(self, start_date: date, end_date: date) -> Optional[float]:
+        try:
+            self.logger.info(f"Comparing portfolio to S&P 500 from {start_date} to {end_date}")
+            portfolio_roi = self.calculate_roi(start_date, end_date)
+            self.logger.info(f"Portfolio ROI: {portfolio_roi}")
+            
+            spy_data = self.portfolio._fetch_prices(['SPY'], start_date, end_date)
+            if spy_data.empty:
+                self.logger.warning("Unable to fetch S&P 500 data for comparison")
+                return None
+            
+            spy_start_price = spy_data['SPY'].iloc[0]
+            spy_end_price = spy_data['SPY'].iloc[-1]
+            self.logger.info(f"S&P 500 start price: {spy_start_price}, end price: {spy_end_price}")
+            
+            spy_roi = ((spy_end_price - spy_start_price) / spy_start_price) * 100
+            self.logger.info(f"S&P 500 ROI: {spy_roi}")
+            
+            difference = portfolio_roi - spy_roi
+            self.logger.info(f"Difference: {difference}")
+            
+            return difference
+        except Exception as e:
+            self.logger.error(f"Error in compare_to_spy: {str(e)}")
+            return None
+
+class Portfolio:
+    from typing import Optional
+
+    def __init__(
+            self,
+            db_path: str = DEFAULT_DB_PATH,
+            price_fetcher: Optional[PriceFetcher] = None,
+            price_fetcher_name: Optional[str] = None
+            ):
+        self.logger = setup_logger(__name__, LOG_FILE_PATH, level=logging.DEBUG)
+        self.logger.info("Initializing Portfolio object")
+
+        self.db_path = db_path
+        self._invalid_symbols: Set[str] = set()
+        self.db_manager = DatabaseManager(db_path)
+        with self.db_manager as _:
+            if not self.db_manager.tables_exist():
+                self.logger.warning("Database tables do not exist. Initializing...")
+                self.db_manager.init_db()
+            else:
+                self.logger.info("Database tables already exist.")
+
+        self.logger.debug("Creating StockPriceCache")
+        self.price_cache = StockPriceCache(db_path)
+        
+        self.logger.debug("Creating PortfolioAnalyzer")
+        self.analyzer = PortfolioAnalyzer(self)
+
+        # Price fetcher initialization
+        if price_fetcher:
+            self.price_fetcher = price_fetcher
+        elif price_fetcher_name:
+            try:
+                price_fetcher_manager = PriceFetcherManager('plugins')
+                self.price_fetcher = price_fetcher_manager.get_price_fetcher(price_fetcher_name)
+            except (ValueError, FileNotFoundError) as e:
+                self.logger.warning(f"Error loading price fetcher '{price_fetcher_name}': {str(e)}. Falling back to YFinancePriceFetcher.")
+                self.price_fetcher = YFinancePriceFetcher()
+        else:
+            self.price_fetcher = YFinancePriceFetcher()
+
+        self.logger.debug("Loading transactions and cash flows")
+        self.transactions = self.get_transaction_history()
+        self.cash_flows = self.get_cash_flow_history()
+        
+        self.logger.info(f"Loaded {len(self.transactions)} transactions from the database")
+        self.logger.info(f"Loaded {len(self.cash_flows)} cash flows from the database")
+        
+        self.print_database_content()
+        
+        self.logger.info("Portfolio object initialized")
+
+    def _load_transactions_and_cash_flows(self):
+        self.transactions = self.get_transaction_history()
+        self.cash_flows = self.get_cash_flow_history()
+
+    def _init_db(self):
+        self.logger.debug("Entering _init_db method")
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            conn.execute("PRAGMA foreign_keys = 1")
+            cursor = conn.cursor()
+            self.logger.debug("Creating transactions table")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY,
+                    date DATE NOT NULL,
+                    symbol TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    amount DECIMAL(15,2) NOT NULL,
+                    price DECIMAL(15,2) NOT NULL,
+                    fees DECIMAL(15,2) NOT NULL
+                )
+            ''')
+            self.logger.debug("Creating cash_flows table")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cash_flows (
+                    id INTEGER PRIMARY KEY,
+                    date DATE NOT NULL,
+                    amount DECIMAL(15,2) NOT NULL,
+                    flow_type TEXT NOT NULL
+                )
+            ''')
+            self.logger.debug("Creating price_cache table")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS price_cache (
+                    symbol TEXT,
+                    date DATE,
+                    price DECIMAL(15,2),
+                    PRIMARY KEY (symbol, date)
+                )
+            ''')
+            conn.commit()
+        self.logger.debug("Exiting _init_db method")
+
+    @property
+    def invalid_symbols(self) -> Set[str]:
+        return self._invalid_symbols
+
+    @invalid_symbols.setter
+    def invalid_symbols(self, value: Set[str]):
+        self._invalid_symbols = value
+
+    def reset_invalid_symbols(self):
+        self.logger.info("Resetting invalid symbols")
+        self._invalid_symbols = set()
+
+    def add_transaction(self, transaction: Transaction) -> None:
+        DateValidator.validate_not_future(transaction.date, "add transaction")
+        self.logger.info(f"Attempting to add transaction: {transaction}")
+        
+        if transaction.action == 'Buy':
+            current_cash = self.get_cash_balance()
+            transaction_cost = transaction.amount + transaction.fees
+            if transaction_cost > current_cash:
+                error_msg = f"Insufficient funds. Current balance: ${current_cash:.2f}, Transaction cost: ${transaction_cost:.2f}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+        
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO transactions (date, symbol, action, amount, price, fees)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (transaction.date, transaction.symbol, transaction.action,
+                  transaction.amount, transaction.price, transaction.fees))
+            conn.commit()
+            
+            # Verify the insertion
+            cursor.execute('SELECT * FROM transactions WHERE rowid = last_insert_rowid()')
+            inserted_row = cursor.fetchone()
+            if inserted_row:
+                self.logger.debug(f"Inserted transaction: date={inserted_row[1]}, symbol={inserted_row[2]}, action={inserted_row[3]}, amount={inserted_row[4]}, price={inserted_row[5]}, fees={inserted_row[6]}")
+            else:
+                self.logger.warning("Failed to retrieve the inserted transaction")
+            
+        self.transactions.append(transaction)
+        self.logger.info(f"Transaction added successfully")
+
+    def add_cash_flow(self, cash_flow: CashFlow) -> None:
+        DateValidator.validate_not_future(cash_flow.date, "add cash flow")
+        self.logger.info(f"Attempting to add cash flow: {cash_flow}")
+        
+        if cash_flow.flow_type == 'Withdrawal':
+            current_cash = self.get_cash_balance()
+            if cash_flow.amount > current_cash:
+                error_msg = f"Insufficient funds for withdrawal. Current balance: ${current_cash:.2f}, Withdrawal amount: ${cash_flow.amount:.2f}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+        
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO cash_flows (date, amount, flow_type)
+                VALUES (?, ?, ?)
+            ''', (cash_flow.date, cash_flow.amount, cash_flow.flow_type))
+            conn.commit()
+            
+            # Verify the insertion
+            cursor.execute('SELECT * FROM cash_flows WHERE rowid = last_insert_rowid()')
+            inserted_row = cursor.fetchone()
+            if inserted_row:
+                self.logger.debug(f"Inserted cash flow: date={inserted_row[1]}, amount={inserted_row[2]}, flow_type={inserted_row[3]}")
+            else:
+                self.logger.warning("Failed to retrieve the inserted cash flow")
+            
+        self.cash_flows.append(cash_flow)
+        self.logger.info(f"Cash flow added successfully")
+
+    def _get_stock_price(self, symbol: str, date: date) -> Optional[float]:
+        self.logger.debug(f"Attempting to get stock price for {symbol} on {date}")
+
+        if symbol in self._invalid_symbols:
+            self.logger.warning(f"{symbol} is invalid. Skipping.")
+            return None
+
+        cached_prices = self.price_cache.get_cached_prices(symbol, date, date)
+        self.logger.debug(f"Cached prices for {symbol} on {date}: {cached_prices}")
+        
+        cached_price = cached_prices.get(pd.Timestamp(date))
+        if cached_price is not None:
+            self.logger.debug(f"Price for {symbol} on {date} found in cache: {cached_price}")
+            return cached_price
+
+        today = datetime.now().date()
+        if date > today:
+            self.logger.warning(f"Requested date {date} is in the future. Using latest available price.")
+            date = today
+        elif date == today:
+            self.logger.info(f"Fetching current price for {symbol}")
+            current_price = self.price_fetcher.fetch_current_price(symbol)
+            if current_price is not None:
+                self.price_cache.cache_prices(symbol, pd.Series({pd.Timestamp(date): current_price}))
+                return current_price
+
+        start_date = date - pd.Timedelta(days=5)
+        end_date = date
+
+        self.logger.debug(f"Fetching prices for {symbol} from {start_date} to {end_date}")
+        price_data = self._fetch_prices([symbol], start_date, end_date)
+        self.logger.debug(f"Fetched price data: {price_data}")
+
+        if not price_data.empty and symbol in price_data.columns:            
+            # Ensure the index is in datetime format
+            price_data.index = pd.to_datetime(price_data.index)
+
+            # Filter the DataFrame where the date part of the index is less than or equal to the given date
+            valid_data = price_data[price_data.index.date <= date]
+
+            if not valid_data.empty:
+                self.logger.debug(f"Valid data for {symbol}: {valid_data}")
+                self.price_cache.cache_prices(symbol, valid_data[symbol])
+                price = valid_data[symbol].iloc[-1]
+                last_date = valid_data.index[-1].date()
+                self.logger.debug(f"Price found for {symbol}: {price:.2f} on {last_date}")
+                return price
+            else:
+                self.logger.warning(f"No valid data found for {symbol} on or before {date}")
+        else:
+            self.logger.warning(f"No price data available for {symbol} between {start_date} and {end_date}")
+
+        return self._get_last_known_price(symbol)
+
+    def get_current_value(self) -> float:
+        try:
+            cash_balance = self.get_cash_balance()
+            stock_value = self._get_total_stock_value()
+            total_value = round(cash_balance + stock_value, 2)
+            self.logger.info(f"Current portfolio value: ${total_value:.2f} (Cash: ${cash_balance:.2f}, Stocks: ${stock_value:.2f})")
+            return total_value
+        except PriceDataError as e:
+            self.logger.error(f"Error calculating stock value: {str(e)}")
+            return cash_balance  # Return only cash balance if stock value can't be calculated
+        except Exception as e:
+            self.logger.error(f"Unexpected error calculating portfolio value: {str(e)}", exc_info=True)
+            raise
+
+    def _get_last_known_price(self, symbol: str) -> Optional[float]:
+        with self.db_manager as cursor:
+            cursor.execute(
+                "SELECT price FROM price_cache WHERE symbol = ? ORDER BY date DESC LIMIT 1",
+                (symbol,)
+            )
+            result = cursor.fetchone()
+        if result:
+            self.logger.info(f"Last known price for {symbol}: ${result[0]:.2f}")
+            return result[0]
+        else:
+            self.logger.warning(f"No last known price found for {symbol}")
+            return None
+
+    def _get_portfolio_value_at_date(self, target_date: date) -> float:
+        value = self._get_cash_at_date(target_date)
+        holdings = self._get_holdings_at_date(target_date)
+        
+        if holdings:
+            symbols = list(holdings.keys())
+            prices = self._fetch_prices(symbols, target_date, target_date)
+            if not prices.empty:
+                for symbol, shares in holdings.items():
+                    if symbol in prices.columns:
+                        value += shares * prices[symbol].iloc[0]
+            else:
+                self.logger.warning(f"Unable to fetch prices for portfolio valuation on {target_date}")
+
+        return value
+
+    def _get_cash_at_date(self, target_date: date) -> float:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT 
+                    COALESCE(SUM(CASE WHEN flow_type IN ('Deposit', 'Dividend') THEN amount 
+                                      WHEN flow_type = 'Withdrawal' THEN -amount 
+                                      ELSE 0 END), 0) as cash_flow_sum,
+                    COALESCE(SUM(CASE WHEN action = 'Buy' THEN -amount ELSE amount END), 0) as transaction_sum
+                FROM (
+                    SELECT date, 0 as amount, '' as flow_type, action, amount as transaction_amount
+                    FROM transactions
+                    WHERE date <= ?
+                    UNION ALL
+                    SELECT date, amount, flow_type, '' as action, 0 as transaction_amount
+                    FROM cash_flows
+                    WHERE date <= ?
+                )
+            ''', (target_date, target_date))
+            result = cursor.fetchone()
+            cash_balance = result[0] + result[1]
+            if cash_balance < 0:
+                raise ValueError(f"Error: Negative cash balance of ${cash_balance:.2f} detected on {target_date}")
+            return cash_balance
+
+    def _get_holdings_at_date(self, target_date: date) -> Dict[str, float]:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT symbol, SUM(CASE WHEN action = 'Buy' THEN amount / price ELSE -amount / price END) as net_shares
+                FROM transactions
+                WHERE date <= ?
+                GROUP BY symbol
+                HAVING net_shares > 0
+            ''', (target_date,))
+            return {row[0]: row[1] for row in cursor.fetchall()}
+
+    def get_transaction_history(self) -> List[Transaction]:
+        self.logger.info("Retrieving transaction history")
+        transactions = []
+        try:
+            with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM transactions ORDER BY date')
+                rows = cursor.fetchall()
+                self.logger.info(f"Retrieved {len(rows)} transaction records from database")
+                for row in rows:
+                    self.logger.debug(f"Raw transaction data: {dict(row)}")
+                    try:
+                        transaction = Transaction(
+                            date=row['date'],
+                            symbol=row['symbol'],
+                            action=row['action'],
+                            amount=float(row['amount']),
+                            price=float(row['price']),
+                            fees=float(row['fees'])
+                        )
+                        transactions.append(transaction)
+                    except Exception as e:
+                        self.logger.error(f"Error creating Transaction object: {str(e)}")
+        except sqlite3.OperationalError as e:
+            self.logger.error(f"Error retrieving transactions: {str(e)}")
+        except Exception as e:
+            self.logger.error(f"Unexpected error in get_transaction_history: {str(e)}")
+        
+        self.logger.info(f"Returning {len(transactions)} transaction objects")
+        return transactions
+
+    def get_cash_flow_history(self) -> List[CashFlow]:
+        self.logger.info("Retrieving cash flow history")
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM cash_flows ORDER BY date')
+            cash_flows = []
+            rows = cursor.fetchall()
+            self.logger.info(f"Retrieved {len(rows)} cash flow records from database")
+            for row in rows:
+                self.logger.debug(f"Raw cash flow data: {dict(row)}")
+                try:
+                    cash_flow = CashFlow(
+                        date=row['date'],
+                        amount=float(row['amount']),
+                        flow_type=row['flow_type']
+                    )
+                    cash_flows.append(cash_flow)
+                except Exception as e:
+                    self.logger.error(f"Error creating CashFlow object: {str(e)}")
+            self.logger.info(f"Returning {len(cash_flows)} cash flow objects")
+            return cash_flows
+
+    def print_database_content(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM cash_flows")
+            cash_flows = cursor.fetchall()
+            self.logger.info(f"Cash Flows in database: {cash_flows}")
+            cursor.execute("SELECT * FROM transactions")
+            transactions = cursor.fetchall()
+            self.logger.info(f"Transactions in database: {transactions}")
+        self.logger.info(f"Transactions in memory: {self.transactions}")
+        self.logger.info(f"Cash flows in memory: {self.cash_flows}")
+
+    def get_current_holdings(self) -> Dict[str, float]:
+        holdings = {}
+        for t in self.get_transaction_history():
+            if t.action == 'Buy':
+                holdings[t.symbol] = holdings.get(t.symbol, 0) + (t.amount / t.price)
+            else:  # Sell
+                holdings[t.symbol] = holdings.get(t.symbol, 0) - (t.amount / t.price)
+        
+        # Remove any symbols with zero or negative shares
+        holdings = {symbol: shares for symbol, shares in holdings.items() if shares > 0}
+        
+        self.logger.info(f"Current holdings: {holdings}")
+        return holdings
+
+    def get_cash_balance(self) -> float:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            
+            # Calculate cash flow sum
+            cursor.execute('''
+                SELECT COALESCE(SUM(CASE WHEN flow_type IN ('Deposit', 'Dividend') THEN amount 
+                                        WHEN flow_type = 'Withdrawal' THEN -amount 
+                                        ELSE 0 END), 0) as cash_flow_sum
+                FROM cash_flows
+            ''')
+            cash_flow_sum = cursor.fetchone()[0]
+            self.logger.debug(f"Cash flow sum: {cash_flow_sum:.2f}")
+            
+            # Calculate transaction sum
+            cursor.execute('''
+                SELECT COALESCE(SUM(CASE WHEN action = 'Buy' THEN -amount - fees ELSE amount - fees END), 0) as transaction_sum
+                FROM transactions
+            ''')
+            transaction_sum = cursor.fetchone()[0]
+            self.logger.debug(f"Transaction sum: {transaction_sum:.2f}")
+            
+            cash_balance = round(Decimal(cash_flow_sum) + Decimal(transaction_sum), 2)
+            self.logger.debug(f"Calculated cash balance: {cash_balance:.2f}")
+            
+            if cash_balance < 0:
+                raise ValueError(f"Error: Negative cash balance of ${cash_balance:.2f} detected")
+            return float(cash_balance)
+
+    def get_portfolio_value_over_time(self, start_date: InputDate, end_date: InputDate) -> pd.Series:
+        try:
+            start_date = parse_date(start_date)
+            end_date = parse_date(end_date)
+            DateValidator.validate_date_range(start_date, end_date, "get portfolio value")
+
+            dates = pd.date_range(start=start_date, end=end_date)
+            values = []
+            
+            transactions = sorted([t for t in self.get_transaction_history() if start_date <= t.date <= end_date], key=lambda x: x.date)
+            cash_flows = sorted([cf for cf in self.get_cash_flow_history() if start_date <= cf.date <= end_date], key=lambda x: x.date)
+            
+            symbols = set(t.symbol for t in transactions)
+            price_data = self._fetch_prices(list(symbols), start_date, end_date)
+            
+            cumulative_cash = Decimal('0')
+            holdings = {symbol: Decimal('0') for symbol in symbols}
+            
+            cf_index = 0
+            t_index = 0
+            
+            for date in dates:
+                current_date = date.date()
+                
+                # Process cash flows for the current date
+                while cf_index < len(cash_flows) and cash_flows[cf_index].date == current_date:
+                    cf = cash_flows[cf_index]
+                    if cf.flow_type in ('Deposit', 'Dividend'):
+                        cumulative_cash += Decimal(str(cf.amount))
+                    else:
+                        cumulative_cash -= Decimal(str(cf.amount))
+                    self.logger.debug(f"Processed cash flow: {cf}, New cash: {cumulative_cash}")
+                    cf_index += 1
+                
+                # Process transactions for the current date
+                while t_index < len(transactions) and transactions[t_index].date == current_date:
+                    t = transactions[t_index]
+                    if t.action == 'Buy':
+                        holdings[t.symbol] += Decimal(str(t.amount / t.price))
+                        cumulative_cash -= Decimal(str(t.amount + t.fees))
+                    else:  # Sell
+                        holdings[t.symbol] -= Decimal(str(t.amount / t.price))
+                        cumulative_cash += Decimal(str(t.amount - t.fees))
+                    self.logger.debug(f"Processed transaction: {t}, New holdings: {holdings}, Cash: {cumulative_cash}")
+                    t_index += 1
+                
+                stock_value = Decimal('0')
+                for symbol, shares in holdings.items():
+                    if not price_data.empty and symbol in price_data.columns:
+                        price_series = price_data[symbol]
+                        price = price_series.loc[date] if date in price_series.index else None
+                        if price is not None:
+                            price = Decimal(str(price))
+                            self.logger.debug(f"Using fetched price for {symbol} on {current_date}: ${float(price):.2f}")
+                        else:
+                            self.logger.warning(f"No price data for {symbol} on {current_date}, using last known price")
+                            price = Decimal(str(self._get_last_known_price(symbol) or 0))
+                    else:
+                        self.logger.warning(f"No price data for {symbol}, using last known price")
+                        price = Decimal(str(self._get_last_known_price(symbol) or 0))
+                    stock_value += shares * price
+                
+                total_value = round(cumulative_cash + stock_value, 2)
+                values.append(float(total_value))
+                self.logger.info(f"Date: {current_date}, Cash: {float(cumulative_cash):.2f}, Stock Value: {float(stock_value):.2f}, Total: {float(total_value):.2f}")
+            
+            return pd.Series(values, index=dates)
+
+        except ValueError as e:
+            raise PortfolioValueError(f"Date validation error: {str(e)}")
+        except KeyError as e:
+            raise PriceDataError(f"Missing price data for symbol: {str(e)}")
+        except Exception as e:
+            raise PortfolioValueError(f"Unexpected error in portfolio valuation: {str(e)}")
+
+    def _fetch_prices(self, symbols: List[str], start_date: InputDate, end_date: InputDate) -> pd.DataFrame:
+        try:
+            self.logger.info(f"Fetching prices for symbols: {symbols} from {start_date} to {end_date}")
+            
+            start_date = parse_date(start_date)
+            end_date = parse_date(end_date)
+            price_data = pd.DataFrame(index=pd.date_range(start=start_date, end=end_date))
+            
+            for symbol in symbols:
+                cached_prices = self.price_cache.get_cached_prices(symbol, start_date, end_date)
+                self.logger.info(f"Cached data for {symbol}: {len(cached_prices)} entries")
+                
+                if len(cached_prices) < (end_date - start_date).days + 1:
+                    fetch_start_date = start_date
+                    if not cached_prices.empty:
+                        last_cached_date = cached_prices.index.max().date()
+                        fetch_start_date = last_cached_date + timedelta(days=1)
+
+                    self.logger.debug(f"Fetching missing data for {symbol} from {fetch_start_date} to {end_date}")
+                    fetched_prices = self.price_fetcher.fetch_prices([symbol], fetch_start_date, end_date)
+                    self.logger.debug(f"Fetched prices: {fetched_prices}")
+                    
+                    if not fetched_prices.empty:
+                        self.logger.info(f"Fetched {len(fetched_prices)} new prices for {symbol}")
+                        self.price_cache.cache_prices(symbol, fetched_prices[symbol])
+                        cached_prices = self.price_cache.get_cached_prices(symbol, start_date, end_date)
+                    else:
+                        self.logger.warning(f"No new price data fetched for {symbol}")
+                
+                if not cached_prices.empty:
+                    price_data[symbol] = cached_prices
+                else:
+                    self.logger.warning(f"No price data available for {symbol}. Using last known price.")
+                    last_price = self._get_last_known_price(symbol)
+                    if last_price is not None:
+                        price_data[symbol] = last_price
+                    else:
+                        self.logger.error(f"No historical price data available for {symbol}")
+                        raise PriceDataError(f"No price data available for {symbol}")
+
+            if price_data.empty:
+                self.logger.warning("No price data available for any symbol")
+                return pd.DataFrame(index=pd.date_range(start=start_date, end=end_date))
+
+            #self.logger.info(f"Final price data shape: {price_data.shape}")
+            self.logger.debug(f"Final price data:\n{price_data}")
+            return price_data.ffill().infer_objects()
+        except Exception as e:
+            self.logger.error(f"Error fetching prices: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            raise PriceDataError(f"Failed to fetch prices: {str(e)}")
+
+    def _get_cached_prices(self, symbols: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        date_range = pd.date_range(start=start_date, end=end_date)
+        price_data = pd.DataFrame(index=date_range, columns=symbols)
+        
+        for symbol in symbols:
+            symbol_prices = self.price_cache.get_cached_prices(symbol, start_date, end_date)
+            price_data[symbol] = symbol_prices
+            self.logger.info(f"Cached data for {symbol}: {len(symbol_prices)} entries")
+        
+        return price_data
+
+    def _get_missing_data_symbols(self, price_data: pd.DataFrame) -> List[str]:
+        missing_data = price_data.isna().any()
+        return missing_data[missing_data].index.tolist()
+
+    def _fetch_missing_data(self, symbols: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        current_date = datetime.now().date()
+        fetch_end_date = min(end_date, current_date)
+        fetch_start_date = max(start_date, fetch_end_date - timedelta(days=365))
+        
+        return self.price_fetcher.fetch_prices(symbols, fetch_start_date, fetch_end_date)
+
+    def _update_price_data(self, price_data: pd.DataFrame, fetched_data: pd.DataFrame) -> pd.DataFrame:
+        for symbol in fetched_data.columns:
+            price_data.loc[fetched_data.index[0]:fetched_data.index[-1], symbol] = fetched_data[symbol]
+            for date, price in fetched_data[symbol].items():
+                if not pd.isna(price):
+                    self.price_cache.cache_prices(symbol, pd.Series({date: price}))
+        return price_data
+
+    def _get_total_stock_value(self) -> float:
+        current_date = datetime.now().date()
+        total_stock_value = Decimal('0')
+        holdings = self.get_current_holdings()
+        
+        if not holdings:
+            self.logger.info("No current holdings found.")
+            return float(total_stock_value)
+
+        symbols = list(holdings.keys())
+        self.logger.info(f"Fetching prices for symbols: {symbols}")
+        try:
+            prices = self._fetch_prices(symbols, current_date, current_date)
+        except PriceDataError as e:
+            self.logger.error(f"Error fetching prices: {str(e)}")
+            self.logger.info("Falling back to last known prices")
+            prices = self._get_last_known_prices(symbols)
+
+        for symbol, shares in holdings.items():
+            try:
+                if not prices.empty and symbol in prices.columns:
+                    price = Decimal(str(prices.iloc[-1][symbol]))  # Get the last (most recent) price
+                    self.logger.info(f"Using fetched price for {symbol}: ${float(price):.2f}")
+                else:
+                    price = Decimal(str(self._get_last_known_price(symbol)))
+                    self.logger.warning(f"Using last known price for {symbol}: ${float(price):.2f}")
+                
+                stock_value = Decimal(str(shares)) * price
+                total_stock_value += stock_value
+                self.logger.info(f"Value for {symbol}: {shares} shares @ ${float(price):.2f} = ${float(stock_value):.2f}")
+            except Exception as e:
+                self.logger.error(f"Error calculating value for {symbol}: {str(e)}")
+                # Continue with the next symbol instead of raising an exception
+
+        self.logger.info(f"Total stock value: ${float(total_stock_value):.2f}")
+        return float(total_stock_value)
+
+    def _get_last_known_prices(self, symbols: List[str]) -> pd.Series:
+            prices = {}
+            for symbol in symbols:
+                price = self._get_last_known_price(symbol)
+                if price is not None:
+                    prices[symbol] = price
+                else:
+                    self.logger.warning(f"No last known price found for {symbol}")
+            return pd.Series(prices)
+
+    def _get_purchase_price(self, symbol: str) -> float:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT price
+                FROM transactions
+                WHERE symbol = ? AND action = 'Buy'
+                ORDER BY date DESC
+                LIMIT 1
+            ''', (symbol,))
+            result = cursor.fetchone()
+            return result[0] if result else 0.0
+
+    def edit_transaction(self, index: int, new_transaction: Transaction) -> None:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE transactions
+                SET date = ?, symbol = ?, action = ?, amount = ?, price = ?, fees = ?
+                WHERE id = (SELECT id FROM transactions ORDER BY date LIMIT 1 OFFSET ?)
+            ''', (new_transaction.date, new_transaction.symbol, new_transaction.action,
+                  new_transaction.amount, new_transaction.price, new_transaction.fees, index))
+            if cursor.rowcount == 0:
+                raise ValueError("Invalid transaction index")
+            conn.commit()
+
+    def delete_transaction(self, index: int) -> None:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM transactions
+                WHERE id = (SELECT id FROM transactions ORDER BY date LIMIT 1 OFFSET ?)
+            ''', (index,))
+            if cursor.rowcount == 0:
+                raise ValueError("Invalid transaction index")
+            conn.commit()
+
+    def edit_cash_flow(self, index: int, new_cash_flow: CashFlow) -> None:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE cash_flows
+                SET date = ?, amount = ?, flow_type = ?
+                WHERE id = (SELECT id FROM cash_flows ORDER BY date LIMIT 1 OFFSET ?)
+            ''', (new_cash_flow.date, new_cash_flow.amount, new_cash_flow.flow_type, index))
+            if cursor.rowcount == 0:
+                raise ValueError("Invalid cash flow index")
+            conn.commit()
+
+    def delete_cash_flow(self, index: int) -> None:
+        with sqlite3.connect(self.db_path, detect_types=sqlite3.PARSE_DECLTYPES|sqlite3.PARSE_COLNAMES) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM cash_flows
+                WHERE id = (SELECT id FROM cash_flows ORDER BY date LIMIT 1 OFFSET ?)
+            ''', (index,))
+            if cursor.rowcount == 0:
+                raise ValueError("Invalid cash flow index")
+            conn.commit()
+
+    @property
+    def cash(self):
+        return self.get_cash_balance()
+
+
+
+./portfolio\price_fetcher.py:
+from abc import ABC, abstractmethod
+from typing import List, Union, Optional
+from datetime import date, timedelta, datetime
+import pandas as pd
+import yfinance as yf
+import logging
+from requests.exceptions import RequestException
+from urllib3.exceptions import HTTPError
+import importlib
+import time
+import os
+from core.date_utils import parse_date
+
+InputDate = Union[str, date, datetime]
+
+class PriceFetcher(ABC):
+    """
+    Abstract base class for price fetchers.
+    """
+    @abstractmethod
+    def fetch_prices(self, symbols: List[str], start_date: date, end_date: date) -> pd.DataFrame:
+        """
+        Fetch stock prices for the given symbols and date range.
+
+        Args:
+            symbols (List[str]): List of stock symbols to fetch prices for.
+            start_date (date): Start date for the price data.
+            end_date (date): End date for the price data.
+
+        Returns:
+            pd.DataFrame: A DataFrame containing the fetched price data.
+        """
+        pass
+
+    @abstractmethod
+    def fetch_current_price(self, symbol: str) -> Optional[float]:
+        pass
+
+class PriceFetcherPlugin(ABC):
+    @abstractmethod
+    def fetch_prices(self, symbols: List[str], start_date: InputDate, end_date: InputDate) -> pd.DataFrame:
+        pass
+
+class PriceFetcherManager:
+    def __init__(self, plugin_dir: str):
+        self.plugins = {}
+        self._load_plugins(plugin_dir)
+
+    def _load_plugins(self, plugin_dir: str):
+        for filename in os.listdir(plugin_dir):
+            if filename.endswith('.py') and not filename.startswith('_'):
+                module_name = filename[:-3]
+                module = importlib.import_module(f"plugins.{module_name}")
+                for attr_name in dir(module):
+                    attr = getattr(module, attr_name)
+                    if isinstance(attr, type) and issubclass(attr, PriceFetcher) and attr is not PriceFetcher:
+                        self.plugins[module_name] = attr()
+
+    def get_price_fetcher(self, name: str) -> PriceFetcher:
+        if name in self.plugins:
+            return self.plugins[name]
+        elif name == 'yfinance':
+            return YFinancePriceFetcher()
+        else:
+            raise ValueError(f"Unknown price fetcher: {name}")
+
+class YFinancePriceFetcher(PriceFetcher):
+    def __init__(self, max_retries=3, retry_delay=1, fallback_period=30):
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG)
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.fallback_period = fallback_period
+
+    def fetch_current_price(self, symbol: str) -> Optional[float]:
+        try:
+            ticker = yf.Ticker(symbol)
+            current_price = ticker.info.get('regularMarketPrice')
+            if current_price is not None:
+                self.logger.info(f"Fetched current price for {symbol}: ${current_price:.2f}")
+                return current_price
+            else:
+                self.logger.warning(f"Unable to fetch current price for {symbol}")
+                return None
+        except Exception as e:
+            self.logger.error(f"Error fetching current price for {symbol}: {str(e)}")
+            return None
+
+    def fetch_prices(self, symbols: List[str], start_date: InputDate, end_date: InputDate) -> pd.DataFrame:
+        start_date = parse_date(start_date)
+        end_date = parse_date(end_date)
+        self.logger.debug(f"Fetching prices for {symbols} from {start_date} to {end_date}")
+        
+        all_data = pd.DataFrame()
+        
+        for symbol in symbols:
+            symbol_data = self._fetch_single_symbol(symbol, start_date, end_date)
+            if not symbol_data.empty:
+                all_data[symbol] = symbol_data
+
+        if all_data.empty:
+            self.logger.warning("No data fetched for any symbol")
+        else:
+            self.logger.debug(f"Fetched data:\n{all_data}")
+
+        return all_data
+
+    def _fetch_single_symbol(self, symbol: str, start_date: date, end_date: date) -> pd.Series:
+        for attempt in range(self.max_retries):
+            try:
+                self.logger.debug(f"Attempting to fetch data for {symbol} (Attempt {attempt + 1})")
+                data = yf.download(symbol, start=start_date, end=end_date + timedelta(days=1), progress=False)['Close']
+                
+                if data.empty:
+                    self.logger.warning(f"yfinance returned empty DataFrame for {symbol} on attempt {attempt + 1}")
+                    if attempt == self.max_retries - 1:  # Last attempt
+                        return self._fetch_fallback(symbol, start_date, end_date)
+                    time.sleep(self.retry_delay)
+                    continue
+                
+                self.logger.debug(f"Successfully fetched data for {symbol}: {data}")
+                return data
+
+            except (RequestException, HTTPError) as e:
+                self.logger.error(f"Network error for {symbol} on attempt {attempt + 1}: {str(e)}")
+                if attempt == self.max_retries - 1:  # Last attempt
+                    return self._fetch_fallback(symbol, start_date, end_date)
+                time.sleep(self.retry_delay)
+            except Exception as e:
+                self.logger.error(f"Unexpected error for {symbol} on attempt {attempt + 1}: {str(e)}", exc_info=True)
+                if attempt == self.max_retries - 1:  # Last attempt
+                    return self._fetch_fallback(symbol, start_date, end_date)
+                time.sleep(self.retry_delay)
+        
+        return pd.Series()
+
+    def _fetch_fallback(self, symbol: str, start_date: date, end_date: date) -> pd.Series:
+        self.logger.debug(f"Attempting fallback fetch for {symbol} with extended date range")
+        extended_start = start_date - timedelta(days=self.fallback_period)
+        extended_end = end_date + timedelta(days=self.fallback_period)
+        
+        try:
+            data = yf.download(symbol, start=extended_start, end=extended_end + timedelta(days=1), progress=False)['Close']
+            if not data.empty:
+                self.logger.debug(f"Fallback fetch successful for {symbol}: {data}")
+                return data[start_date:end_date]
+            else:
+                self.logger.warning(f"Fallback fetch for {symbol} returned empty DataFrame")
+                return pd.Series()
+        except Exception as e:
+            self.logger.error(f"Fallback fetch for {symbol} failed: {str(e)}", exc_info=True)
+            return pd.Series()
+
+
+
+./portfolio\transaction.py:
+from datetime import datetime, date as date_type
+from dataclasses import dataclass
+from typing import Union
+
+@dataclass
+class Transaction:
+    """
+    Represents a stock transaction.
+
+    Attributes:
+        date (date_type): The date of the transaction.
+        symbol (str): The stock symbol.
+        action (Literal['Buy', 'Sell']): The type of transaction (Buy or Sell).
+        amount (float): The amount of money involved in the transaction.
+        price (float): The price per share.
+        fees (float): Any associated fees with the transaction.
+    """
+    date: date_type
+    symbol: str
+    action: str
+    amount: float
+    price: float
+    fees: float = 0.0
+
+    @property
+    def shares(self) -> float:
+        """Calculate the number of shares based on the amount and price."""
+        return self.amount / self.price if self.price != 0 else 0
+
+    def __post_init__(self):
+        """Validate the transaction data after initialization."""
+        self._validate_inputs()
+
+    def _validate_inputs(self):
+        """Validate the input data for the transaction."""
+        if not isinstance(self.date, date_type):
+            raise ValueError("Date must be a date object")
+        if not isinstance(self.symbol, str) or not self.symbol:
+            raise ValueError("Symbol must be a non-empty string")
+        if self.action not in ['Buy', 'Sell']:
+            raise ValueError("Action must be either 'Buy' or 'Sell'")
+        if not isinstance(self.amount, (int, float)) or self.amount <= 0:
+            raise ValueError("Amount must be a positive number")
+        if not isinstance(self.price, (int, float)) or self.price <= 0:
+            raise ValueError("Price must be a positive number")
+        if not isinstance(self.fees, (int, float)) or self.fees < 0:
+            raise ValueError("Fees must be a non-negative number")
+
+    def total_value(self) -> float:
+        """Calculate the total value of the transaction."""
+        return round(self.amount + self.fees, 2)
+
+    def net_value(self) -> float:
+        """Calculate the net value of the transaction (excluding fees)."""
+        return round(self.amount, 2)
+
+    def to_dict(self) -> dict:
+        """Convert the transaction to a dictionary."""
+        return {
+            'date': self.date.isoformat(),
+            'symbol': self.symbol,
+            'action': self.action,
+            'amount': self.amount,
+            'price': self.price,
+            'fees': self.fees
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Transaction':
+        """Create a Transaction instance from a dictionary."""
+        data['date'] = datetime.fromisoformat(data['date']).date()
+        return cls(**data)
+
+    def __str__(self) -> str:
+        """Return a string representation of the transaction."""
+        return (f"{self.action} ${self.amount:.2f} of {self.symbol} "
+                f"at ${self.price:.2f} per share on {self.date.strftime('%Y-%m-%d')}")
+
+@dataclass
+class CashFlow:
+    """
+    Represents a cash flow transaction.
+
+    Attributes:
+        date (datetime.date): The date of the cash flow.
+        amount (float): The amount of the cash flow.
+        flow_type (Literal['Deposit', 'Withdrawal', 'Dividend']): The type of cash flow.
+    """
+    date: date_type
+    amount: float
+    flow_type: str
+
+    def __post_init__(self):
+        """Validate the cash flow data after initialization."""
+        self._validate_inputs()
+
+    def _validate_inputs(self):
+        """Validate the input data for the cash flow."""
+        if not isinstance(self.date, date_type):
+            raise ValueError("Date must be a datetime.date object")
+        if not isinstance(self.amount, (int, float)) or self.amount <= 0:
+            raise ValueError("Amount must be a positive number")
+        if self.flow_type not in ['Deposit', 'Withdrawal', 'Dividend']:
+            raise ValueError("Flow type must be 'Deposit', 'Withdrawal', or 'Dividend'")
+
+    def to_dict(self) -> dict:
+        """Convert the cash flow to a dictionary."""
+        return {
+            'date': self.date.isoformat(),
+            'amount': self.amount,
+            'flow_type': self.flow_type
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'CashFlow':
+        """Create a CashFlow instance from a dictionary."""
+        data['date'] = datetime.fromisoformat(data['date']).date()
+        return cls(**data)
+
+    def __str__(self) -> str:
+        """Return a string representation of the cash flow."""
+        return f"{self.flow_type} of ${self.amount:.2f} on {self.date.strftime('%Y-%m-%d')}"
+
+def create_transaction(
+        date: Union[str, datetime, date_type],
+        symbol: str, action: str,
+        amount: Union[int, float, str],
+        price: Union[float, str], 
+        fees: Union[float, str] = '0.0'
+        ) -> Transaction:
+    """
+    Create a Transaction instance with input validation and type conversion.
+
+    Args:
+        date (Union[str, datetime, date_type]): The date of the transaction (YYYY-MM-DD if string).
+        symbol (str): The stock symbol.
+        action (str): The type of transaction ('Buy' or 'Sell').
+        amount (Union[int, float, str]): The amount of money for the transaction.
+        price (Union[float, str]): The price per share.
+        fees (Union[float, str], optional): Any associated fees. Defaults to '0.0'.
+
+    Returns:
+        Transaction: A new Transaction instance.
+
+    Raises:
+        ValueError: If any of the inputs are invalid.
+    """
+    if isinstance(date, str):
+        date = datetime.strptime(date, '%Y-%m-%d').date()
+    elif isinstance(date, datetime):
+        date = date.date()
+    else:
+        raise ValueError("Date must be a string, datetime, or date object")
+    
+    amount = float(amount)
+    price = float(price)
+    fees = float(fees)
+
+    return Transaction(date, symbol, action, amount, price, fees)
+
+def create_cash_flow(
+        date: Union[str, datetime, date_type],
+        amount: Union[float, str],
+        flow_type: str
+        ) -> CashFlow:
+    """
+    Create a CashFlow instance with input validation and type conversion.
+
+    Args:
+        date (Union[str, datetime, date_type]): The date of the cash flow (YYYY-MM-DD if string).
+        amount (Union[float, str]): The amount of the cash flow.
+        flow_type (str): The type of cash flow ('Deposit', 'Withdrawal', or 'Dividend').
+
+    Returns:
+        CashFlow: A new CashFlow instance.
+
+    Raises:
+        ValueError: If any of the inputs are invalid.
+    """
+    if isinstance(date, str):
+        date = datetime.strptime(date, '%Y-%m-%d').date()
+    elif isinstance(date, datetime):
+        date = date.date()
+    else:
+        raise ValueError("Date must be a string, datetime, or date object")
+    
+    amount = float(amount)
+
+    return CashFlow(date, amount, flow_type)
+
+
+
+./portfolio\__init__.py:
+
+
+
