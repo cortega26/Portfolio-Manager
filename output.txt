@@ -8,7 +8,6 @@ It sets up logging and handles any exceptions that occur during startup.
 
 import sys
 import logging
-from typing import NoReturn
 from PySide6.QtWidgets import QApplication
 from gui.portfolio_manager_gui_pyside import PortfolioManagerGUI
 
@@ -20,7 +19,7 @@ def setup_logging() -> None:
         filename='portfolio_manager.log'
     )
 
-def main() -> NoReturn:
+def main() -> None:
     """
     Initialize and run the Portfolio Manager application.
     
